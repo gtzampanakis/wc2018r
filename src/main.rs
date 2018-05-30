@@ -1,3 +1,66 @@
+/*
+The World Cup 2018 has the following format.
+
+ A1 ----+
+     RS1|----+
+ B2 ----+    |
+          QF1|----+
+ C1 ----+    |    |
+     RS2|----+    |
+ D2 ----+         |
+               SF1|----+
+ E1 ----+         |    |
+     RS5|----+    |    |
+ F2 ----+    |    |    |
+          QF3|----+    |
+ G1 ----+    |         |
+     RS6|----+         |
+ H2 ----+              |
+                       |
+                      F|------
+                       |
+ B1 ----+              |
+     RS3|----+         |
+ A2 ----+    |         |
+          QF2|----+    |
+ D1 ----+    |    |    |
+     RS4|----+    |    |
+ C2 ----+         |    |
+               SF2|----+
+ F1 ----+         |
+     RS7|----+    |
+ E2 ----+    |    |
+          QF4|----+
+ H1 ----+    |
+     RS8|----+
+ G2 --- +
+
+C1: winner of group C
+F2: runner-up of group F
+RS3: 3rd match in the Round of Sixteen
+QF2: 2nd match in the QuarterFinals
+SF1: 1st match in the SemiFinals
+F: Final
+
+Some convenient properties occur from this format.
+
+In the analysis that follows the suffixes A and B are appended to the match
+codes. For example, QF2A/QF2B means team A/B (top/bottom team as it appears in
+the graph).
+
+P(SF_1A, SF_2A)
+   = \sum_{GA} P(SF_1A, SF_2A, GA_ABCD)
+   = \sum_{GA} P(SF_1A, SF_2A | GA_ABCD) P(GA_ABCD)
+   = \sum_{GA} P(SF_1A | GA_ABCD) P(SF_2A | GA_ABCD)
+
+P(SF_1B, SF_2B) = \sum_{GA P(SF_1B | GA_EFGH) P(SF_2B | GA_EFGH) P(GA_EFGH)
+
+P(SF_1A, SF_1B, SF_2A, SF_2B) = P(SF_1A, SF_2A) P(SF_1B, SF_2B)
+
+P(F) = \sum_{SF} P(F | SF1A, SF1B, SF2A, SF2B) P(SF1A, SF2A) P(SF1B, SF2B)
+
+*/
+
 use std::collections::HashMap;
 use std::cmp::Eq;
 use std::hash::Hash;
@@ -7,6 +70,7 @@ use std::hash::Hash;
 type Dist<T> = HashMap<T, f64>;
 type Merits<'a> = HashMap<&'a str, f64>;
 type Teams<'a> = Vec<&'a str>;
+
 
 fn prod(ns: &Vec<f64>) -> f64 {
     let mut result = 1.;
@@ -65,6 +129,88 @@ fn p_ga<'a>(gs: &[&Teams<'a>], m: &Merits<'a>)
     }
 
     let result = comb_dists(&dists);
+
+    result
+}
+
+
+/*
+j does not make a difference here so it is not required in the arguments.
+You just have to pass the correct groups, [a,b,c,d] for j=1 or [e,f,g,h] for
+j=2.
+*/
+fn p_sfij_given_ga<'a>(i: usize, ga: &[(&'a str, &'a str)], m: &Merits) 
+                                                            -> Dist<&'a str>
+{
+    if i == 1 {
+        bracket_conv(
+            &vec![ga[0].0, ga[1].1, ga[2].0, ga[3].1],
+            m
+        )
+    }
+    else if i == 2 {
+        bracket_conv(
+            &vec![ga[1].0, ga[0].1, ga[3].0, ga[2].1],
+            m
+        )
+    }
+    else {
+        panic!("p_sfij_given_ga: Unexpected value for i: {}", i);
+    }
+}
+
+
+fn p_sf1j_sf2j<'a>(gs: &[&Teams<'a>], m: &Merits<'a>) 
+                                            -> Dist<(&'a str, &'a str)> {
+    let mut result = Dist::new();
+
+    for (ga, pga) in p_ga(gs, m).iter() {
+        let d1 = p_sfij_given_ga(1, ga, m);
+        let d2 = p_sfij_given_ga(2, ga, m);
+        let d12 = comb_dists(&[d1, d2]);
+
+        for (sfpair, psfpair) in d12 {
+            update_dist(&mut result, (sfpair[0], sfpair[1]), psfpair * pga);
+        }
+    }
+
+    result
+}
+
+
+/* Joint probability of SF1A, SF2A, SF1B, SF2B.  */
+fn p_sf1a_sf2a_sf1b_sf2b<'a>(gs: &[&Teams<'a>], m: &Merits<'a>) 
+                        -> Dist<Vec<(&'a str, &'a str)>> {
+    comb_dists(
+        &[
+            p_sf1j_sf2j(&gs[..4], m),
+            p_sf1j_sf2j(&gs[4..], m),
+        ]
+    )
+}
+
+
+/* Probability for the winner. */
+fn p_f<'a>(gs: &[&Teams<'a>], m: &Merits<'a>) -> Dist<&'a str> {
+    let sf_dist = p_sf1a_sf2a_sf1b_sf2b(gs, m);
+
+    let mut result = Dist::new();
+
+    for (sfpairs, psfpairs) in sf_dist {
+        let d = bracket_conv(
+            &[
+                sfpairs[0].0,
+                sfpairs[1].0,
+                sfpairs[0].1,
+                sfpairs[1].1,
+            ],
+            m
+        );
+
+        for (winner, pwinner) in d {
+            update_dist(&mut result, winner, pwinner * psfpairs);
+        }
+    }
 
     result
 }
@@ -280,7 +426,7 @@ fn bracket_conv<'a>(ts: &[ &'a str ], m: &Merits) -> Dist<&'a str> {
         d.insert(*s, 1.);
         v.push(d);
     }
-    return bracket(&v[..], m);
+    return bracket(&v, m);
 }
 
 
@@ -344,6 +490,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::hash::Hash;
 	use prod;
 	use sum;
     use Merits;
@@ -351,10 +498,25 @@ mod tests {
     use bracket_conv;
     use comb_dists;
     use group_probs;
+    use p_f;
     use p_ga;
+    use p_sf1a_sf2a_sf1b_sf2b;
+    use p_sf1j_sf2j;
+    use p_sfij_given_ga;
     use prob_match;
     use CartesianProductor;
     use Dist;
+
+    const MODICUM: f64 = 1e-12;
+
+    fn assert_dist_probs_equal_to_1<T: Eq + Hash>(d: &Dist<T>) {
+        let s = d.values().fold(
+            0.,
+            |a, v| a + v
+        );
+
+        assert!((s-1.).abs() < MODICUM);
+    }
 
     #[test]
     fn test_prod() {
@@ -398,11 +560,10 @@ mod tests {
         let mut s = 0.;
 
         for dm in d.iter() {
-            println!("{:?}", dm);
             s += dm.1;
         }
 
-        assert!((s - 1.).abs() < 1e-5);
+        assert!((s - 1.).abs() < MODICUM);
     }
 
     #[test]
@@ -429,7 +590,6 @@ mod tests {
         assert_eq!(d11["2"], 0.2857142857142857);
         assert_eq!(d11["3"], 0.20238095238095238);
         assert_eq!(d11["4"], 0.0392156862745098);
-
     }
 
     #[test]
@@ -554,6 +714,8 @@ mod tests {
         let combined = comb_dists(&ds);
         let prob = combined[&vec!["1"]];
         assert_eq!(prob, 1.);
+
+        assert_dist_probs_equal_to_1(&combined);
     }
 
     #[test]
@@ -567,6 +729,8 @@ mod tests {
         let combined = comb_dists(&ds);
         let prob = combined[&vec!["1", "2"]];
         assert_eq!(prob, 1.);
+
+        assert_dist_probs_equal_to_1(&combined);
     }
 
     #[test]
@@ -593,6 +757,8 @@ mod tests {
 
         let prob = combined[&vec!["2", "b"]];
         assert_eq!(prob, 0.12);
+
+        assert_dist_probs_equal_to_1(&combined);
     }
 
     #[test]
@@ -606,7 +772,7 @@ mod tests {
         m.insert("f", 21.0);
 
         let d = p_ga(
-            &vec![&vec!["a", "b", "c"], &vec!["d", "e", "f"]][..],
+            &vec![&vec!["a", "b", "c"], &vec!["d", "e", "f"]],
             &m
         );
 
@@ -646,5 +812,157 @@ mod tests {
         assert_eq!(d[&vec![("c", "b"), ("e", "f")]], 0.05202526941657376);
         assert_eq!(d[&vec![("c", "b"), ("f", "d")]], 0.04729569946961251);
         assert_eq!(d[&vec![("c", "b"), ("f", "e")]], 0.05675483936353501);
+
+        assert_dist_probs_equal_to_1(&d);
+    }
+
+    #[test]
+    fn test_p_sfij_given_ga() {
+        let mut m = Merits::new();
+        m.insert("a",  1.);
+        m.insert("b",  2.);
+        m.insert("c",  3.);
+        m.insert("d",  4.);
+        m.insert("e",  5.);
+        m.insert("f",  6.);
+        m.insert("g",  7.);
+        m.insert("h",  8.);
+        m.insert("i",  9.);
+        m.insert("j", 10.);
+        m.insert("k", 11.);
+        m.insert("l", 12.);
+        m.insert("m", 13.);
+        m.insert("n", 14.);
+        m.insert("o", 15.);
+        m.insert("p", 16.);
+
+        let d = p_sfij_given_ga(
+            1,
+            &vec![
+                ("a", "b"),
+                ("e", "f"),
+                ("i", "j"),
+                ("m", "n"),
+            ],
+            &m
+        );
+
+        assert_eq!(d["a"], 0.011387163561076604);
+        assert_eq!(d["i"], 0.25155279503105593);
+        assert_eq!(d["f"], 0.29068322981366457);
+        assert_eq!(d["n"], 0.44637681159420284);
+
+        assert_dist_probs_equal_to_1(&d);
+    }
+
+    #[test]
+    fn test_p_sf1j_sf2j() {
+        let mut m = Dist::new();
+        m.insert("a",  1.);
+        m.insert("b",  2.);
+        m.insert("c",  3.);
+        m.insert("d",  4.);
+        m.insert("e",  5.);
+        m.insert("f",  6.);
+        m.insert("g",  7.);
+        m.insert("h",  8.);
+        m.insert("i",  9.);
+
+        let d = p_sf1j_sf2j(
+            &[
+                &vec!["a", "b"],
+                &vec!["c", "d"],
+                &vec!["e", "f"],
+                &vec!["g", "h"],
+            ],
+            &m
+        );
+
+        assert_dist_probs_equal_to_1(&d);
+
+        assert!(
+            (d[&("h", "g")] - 0.08104988102520536).abs() < MODICUM
+        );
+    }
+
+    #[test]
+    fn test_p_sf1a_sf2a_sf1b_sf2b() {
+        let mut m = Merits::new();
+        m.insert("a",  1.);
+        m.insert("b",  2.);
+        m.insert("c",  3.);
+        m.insert("d",  4.);
+        m.insert("e",  5.);
+        m.insert("f",  6.);
+        m.insert("g",  7.);
+        m.insert("h",  8.);
+        m.insert("i",  9.);
+        m.insert("j", 10.);
+        m.insert("k", 11.);
+        m.insert("l", 12.);
+        m.insert("m", 13.);
+        m.insert("n", 14.);
+        m.insert("o", 15.);
+        m.insert("p", 16.);
+
+        let d = p_sf1a_sf2a_sf1b_sf2b(
+            &[
+                &vec!["a", "b"],
+                &vec!["c", "d"],
+                &vec!["e", "f"],
+                &vec!["g", "h"],
+                &vec!["i", "j"],
+                &vec!["k", "l"],
+                &vec!["m", "n"],
+                &vec!["o", "p"],
+            ],
+            &m
+        );
+
+        assert_dist_probs_equal_to_1(&d);
+
+        assert!(
+            (d[&vec![("h", "g"), ("p", "o")]] - 
+                0.003958437863589254).abs() < MODICUM
+        );
+    }
+
+    #[test]
+    fn test_p_f() {
+        let mut m = Merits::new();
+        m.insert("a",  1.);
+        m.insert("b",  2.);
+        m.insert("c",  3.);
+        m.insert("d",  4.);
+        m.insert("e",  5.);
+        m.insert("f",  6.);
+        m.insert("g",  7.);
+        m.insert("h",  8.);
+        m.insert("i",  9.);
+        m.insert("j", 10.);
+        m.insert("k", 11.);
+        m.insert("l", 12.);
+        m.insert("m", 13.);
+        m.insert("n", 14.);
+        m.insert("o", 15.);
+        m.insert("p", 16.);
+
+        let d = p_f(
+            &[
+                &vec!["a", "b"],
+                &vec!["c", "d"],
+                &vec!["e", "f"],
+                &vec!["g", "h"],
+                &vec!["i", "j"],
+                &vec!["k", "l"],
+                &vec!["m", "n"],
+                &vec!["o", "p"],
+            ],
+            &m
+        );
+
+        assert_dist_probs_equal_to_1(&d);
+
+        assert!((d["p"] - 0.148055327561396).abs() < MODICUM);
     }
 }

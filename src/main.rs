@@ -62,31 +62,16 @@ P(F) = \sum_{SF} P(F | SF1A, SF1B, SF2A, SF2B) P(SF1A, SF2A) P(SF1B, SF2B)
 */
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::cmp::Eq;
 use std::hash::Hash;
 
-/* A distribution is a Vec of pairs, each pair being (event, prob). */
+extern crate regex;
+use regex::Regex;
 
 type Dist<T> = HashMap<T, f64>;
 type Merits<'a> = HashMap<&'a str, f64>;
 type Teams<'a> = Vec<&'a str>;
-
-
-fn prod(ns: &Vec<f64>) -> f64 {
-    let mut result = 1.;
-    for n in ns {
-        result *= n;
-    }
-    result
-}
-
-fn sum(ns: &Vec<f64>) -> f64 {
-    let mut result = 0.;
-    for n in ns {
-        result += n;
-    }
-    result
-}
 
 
 /* Combines independent distributions into one. The resulting distribution has
@@ -465,25 +450,84 @@ fn bracket<'a>(ts: &[ Dist<&'a str> ], m: &Merits)
 }
 
 
+fn calc_ps_diffs<'a>(
+    p_ref: &HashMap<&'a str, f64>,
+    p_est: &HashMap<&'a str, f64>
+) 
+    -> HashMap<&'a str, f64> {
+
+    let p_ref_keys: HashSet<_> = p_ref.keys().collect();
+    let p_est_keys: HashSet<_> = p_est.keys().collect();
+
+    if p_ref_keys != p_est_keys {
+        panic!("calc_ps_diffs: Unequal keysets!");
+    }
+
+    let mut result = HashMap::new();
+
+    for k in p_ref.keys() {
+        result.insert(*k, p_ref[k] - p_est[k]);
+    }
+
+    result
+}
+
+
+/* Returns a HashMap mapping team names to strings and a vector of vectors
+ * that contains the groups */
+fn parse_file_contents(file_contents: &str)
+    -> (HashMap<&str, f64>, Vec<Vec<&str>>) {
+
+        let re = Regex::new(r"^(.*?)([0-9.]+)").unwrap();
+
+        let mut p_ref = HashMap::new();
+        let mut gs: Vec<Vec<&str>> = (0..8).map(|_| vec![]).collect();
+
+        let gi = vec!["a", "b", "c", "d", "e", "f", "g", "h"];
+
+        let mut current_group_index = None;
+
+        for line_untrimmed in file_contents.lines() {
+            let line: &str = line_untrimmed.trim();
+            if line.is_empty() {
+                continue;
+            }
+
+            match re.captures(line) {
+                Some(captures) => {
+                    p_ref.insert(
+                        captures.get(1).unwrap().as_str().trim(),
+                        1. / captures.get(2).unwrap().as_str().trim()
+                                                .parse::<f64>().unwrap()
+                    );
+                }
+                None => {
+                    match gi.iter().position(|rs| &line == rs) {
+                        Some(ind) => {
+                            current_group_index = Some(ind);
+                        },
+                        None => {
+                            match current_group_index {
+                                Some(ind) => {
+                                    gs[ind].push(line);
+                                },
+                                None => (),
+                            }
+                        },
+                    }
+                }
+            }
+        }
+
+        (p_ref, gs)
+}
+
+
+fn run_from_file(inc: f64) {
+}
+
+
 fn main() {
-    let mut c = Combinator::new(5, 2);
-    let vin = vec!["a", "b", "c", "d", "e"];
-    let mut vout = vec![&"a", &"b"];
-
-    while c.next() {
-        println!("{:?}", c.v);
-        rearrange(&vin, &c.v, &mut vout);
-        println!("{:?}\n", vout);
-    }
-
-    c.ret_first = false;
-
-    while c.next() {
-        println!("{:?}", c.v);
-        rearrange(&vin, &c.v, &mut vout);
-        println!("{:?}\n", vout);
-    }
-
 }
 
 
@@ -491,13 +535,13 @@ fn main() {
 mod tests {
     use std::collections::HashMap;
     use std::hash::Hash;
-	use prod;
-	use sum;
     use Merits;
     use bracket;
     use bracket_conv;
+    use calc_ps_diffs;
     use comb_dists;
     use group_probs;
+    use parse_file_contents;
     use p_f;
     use p_ga;
     use p_sf1a_sf2a_sf1b_sf2b;
@@ -516,22 +560,6 @@ mod tests {
         );
 
         assert!((s-1.).abs() < MODICUM);
-    }
-
-    #[test]
-    fn test_prod() {
-		assert_eq!(prod(&vec![]), 1.);
-		assert_eq!(prod(&vec![1., 2., 3.]), 6.);
-		assert_eq!(prod(&vec![-1., 2., 3.]), -6.);
-		assert_eq!(prod(&vec![-1., 2., -3.]), 6.);
-    }
-
-    #[test]
-    fn test_sum() {
-		assert_eq!(sum(&vec![]), 0.);
-		assert_eq!(sum(&vec![1., 2., 3.]), 6.);
-		assert_eq!(sum(&vec![-1., 2., 3.]), 4.);
-		assert_eq!(sum(&vec![-1., 2., -3.]), -2.);
     }
 
     #[test]
@@ -964,5 +992,119 @@ mod tests {
         assert_dist_probs_equal_to_1(&d);
 
         assert!((d["p"] - 0.148055327561396).abs() < MODICUM);
+    }
+
+    #[test]
+    fn test_calc_ps_diffs() {
+        let mut m1 = HashMap::new();
+        m1.insert("a", 5.0);
+        m1.insert("b", 2.0);
+
+        let mut m2 = HashMap::new();
+        m2.insert("a", 1.5);
+        m2.insert("b", 0.2);
+
+        let r = calc_ps_diffs(&m1, &m2);
+
+        assert_eq!(r["a"], 3.5);
+        assert_eq!(r["b"], 1.8);
+    }
+
+    #[test]
+    fn test_parse_file_contents() {
+        let file_contents = "
+            Brazil	5
+            Germany	5.5
+            Spain	7
+            France	7.5
+            Argentina	11
+            Belgium	12
+            England	19
+            Portugal	26
+            Uruguay	34
+            Croatia	34
+            Colombia	41
+            Russia	41
+            Poland	51
+            Denmark	101
+            Switzerland	101
+            Mexico	101
+            Sweden	151
+            Egypt	151
+            Serbia	201
+            Senegal	201
+            Nigeria	201
+            Peru	201
+            Iceland	201
+            Japan	301
+            Australia	301
+            Costa Rica	501
+            Morocco	501
+            Iran	501
+            South Korea	751
+            Tunisia	751
+            Panama	1001
+            Saudi Arabia	1001
+
+            a
+            Russia
+            Saudi Arabia
+            Egypt
+            Uruguay
+
+            b
+            Portugal
+            Spain
+            Morocco
+            Iran
+
+            c
+            France
+            Australia
+            Peru
+            Denmark
+
+            d
+            Argentina
+            Iceland
+            Croatia
+            Nigeria
+
+            e
+            Brazil
+            Switzerland
+            Costa Rica
+            Serbia
+
+            f
+            Germany
+            Mexico
+            Sweden
+            South Korea
+
+            g
+            Belgium
+            Panama
+            Tunisia
+            England
+
+            h
+            Poland
+            Senegal
+            Colombia
+            Japan
+        ";
+
+        let (p_ref, gs) = parse_file_contents(file_contents);
+
+        assert_eq!(1./p_ref["Brazil"], 5.);
+        assert_eq!(1./p_ref["France"], 7.5);
+        assert_eq!(1./p_ref["Denmark"], 101.);
+        assert_eq!(1./p_ref["Panama"], 1001.);
+
+        assert_eq!(gs[0][0], "Russia");
+        assert_eq!(gs[0][1], "Saudi Arabia");
+        assert_eq!(gs[7][2], "Colombia");
+        assert_eq!(gs[7][3], "Japan");
     }
 }

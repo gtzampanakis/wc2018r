@@ -73,6 +73,7 @@ type Dist<T> = HashMap<T, f64>;
 type Merits<'a> = HashMap<&'a str, f64>;
 type Teams<'a> = Vec<&'a str>;
 
+const DEFAULT_RATING_SIGNED: f64 = 0.;
 
 /* Combines independent distributions into one. The resulting distribution has
  * references to the originals' keys. */
@@ -105,7 +106,7 @@ fn comb_dists<T: Eq + Hash + Clone>(ds: &[ Dist<T> ]) -> Dist<Vec<T>>
 
 
 /* Joint probability of group assignments. */
-fn p_ga<'a>(gs: &[&Teams<'a>], m: &Merits<'a>) 
+fn p_ga<'a>(gs: &[Teams<'a>], m: &Merits<'a>) 
                                     -> Dist<Vec<(&'a str, &'a str)>> {
     let mut dists = Vec::new();
 
@@ -145,7 +146,7 @@ fn p_sfij_given_ga<'a>(i: usize, ga: &[(&'a str, &'a str)], m: &Merits)
 }
 
 
-fn p_sf1j_sf2j<'a>(gs: &[&Teams<'a>], m: &Merits<'a>) 
+fn p_sf1j_sf2j<'a>(gs: &[Teams<'a>], m: &Merits<'a>) 
                                             -> Dist<(&'a str, &'a str)> {
     let mut result = Dist::new();
 
@@ -164,7 +165,7 @@ fn p_sf1j_sf2j<'a>(gs: &[&Teams<'a>], m: &Merits<'a>)
 
 
 /* Joint probability of SF1A, SF2A, SF1B, SF2B.  */
-fn p_sf1a_sf2a_sf1b_sf2b<'a>(gs: &[&Teams<'a>], m: &Merits<'a>) 
+fn p_sf1a_sf2a_sf1b_sf2b<'a>(gs: &[Teams<'a>], m: &Merits<'a>) 
                         -> Dist<Vec<(&'a str, &'a str)>> {
     comb_dists(
         &[
@@ -176,7 +177,7 @@ fn p_sf1a_sf2a_sf1b_sf2b<'a>(gs: &[&Teams<'a>], m: &Merits<'a>)
 
 
 /* Probability for the winner. */
-fn p_f<'a>(gs: &[&Teams<'a>], m: &Merits<'a>) -> Dist<&'a str> {
+fn p_f<'a>(gs: &[Teams<'a>], m: &Merits<'a>) -> Dist<&'a str> {
     let sf_dist = p_sf1a_sf2a_sf1b_sf2b(gs, m);
 
     let mut result = Dist::new();
@@ -257,56 +258,6 @@ impl Combinator {
 }
 
 
-struct Permuter {
-    n: usize,
-    i: usize,
-    v: Vec<usize>,
-    zs: usize,
-}
-
-
-impl Permuter {
-
-    fn new(n: usize) -> Permuter {
-        Permuter {
-            n: n,
-            i: 0,
-            v: (0..n).collect(),
-            zs: 2,
-        }
-    }
-
-    fn next(&mut self) -> bool {
-        let mut z = self.n;
-        let mut w;
-
-        self.v = Vec::new(); // TODO: make it so reallocation is not needed
-
-        for a in 0..self.n {
-            w = self.i % (a+1);
-
-            if w == 0 {
-                z -= 1;
-            }
-            self.v.insert(w, self.n-1-a);
-        }
-
-        if z == 0 {
-            self.zs -= 1;
-        }
-
-        if self.zs == 0 {
-            return false;
-        }
-
-        self.i += 1;
-
-        return true;
-    }
-
-}
-
-
 struct CartesianProductor {
     lens: Vec<usize>, // contains the lengths of the iterables
     v: Vec<usize>, // contains the results (updated for each next() call)
@@ -360,14 +311,6 @@ impl CartesianProductor {
         }
     }
 }
-
-
-fn rearrange<'a, T>(vin: &'a Vec<T>, idxs: &Vec<usize>, vout: &mut Vec<&'a T>) {
-    for (idxi, idx) in idxs.iter().enumerate() {
-        vout[idxi] = &vin[*idx];
-    }
-}
-
 
 
 fn prob_match(t1: &str, t2: &str, m: &Merits) -> f64 {
@@ -523,11 +466,48 @@ fn parse_file_contents(file_contents: &str)
 }
 
 
-fn run_from_file(inc: f64) {
+fn print_ps(ps: &HashMap<&str, f64>) {
+    let mut keys_vec: Vec<&&str> = ps.keys().collect();
+    keys_vec.sort_by(|a, b| ps[*b].partial_cmp(&ps[*a]).unwrap());
+
+    for k in keys_vec {
+        println!("{0} {1:.3}", k, 1./ps[k]);
+    }
+    println!();
+}
+
+
+fn run_optimization(
+        p_ref: &HashMap<&str, f64>, gs: &Vec<Vec<&str>>, inc: f64) {
+    let mut m = Merits::new();
+    for key in p_ref.keys() {
+        m.insert(key, DEFAULT_RATING_SIGNED.exp());
+    }
+
+    let mut repi = 1;
+    loop {
+        let p_est = p_f(&gs[..], &m);
+        print_ps(&p_est);
+        println!("Iteration {}", repi);
+
+        let ps_diffs = calc_ps_diffs(p_ref, &p_est);
+        print_ps(&p_est);
+
+        for (t, diff) in ps_diffs {
+            let newval = (m[t].ln() + diff * inc).exp();
+            m.insert(t, newval);
+        }
+
+        repi += 1;
+    }
 }
 
 
 fn main() {
+    let file_contents = &String::from_utf8(
+                        std::fs::read("wc_odds.csv").unwrap()).unwrap();
+    let (p_ref, gs) = parse_file_contents(file_contents);
+    run_optimization(&p_ref, &gs, 6.);
 }
 
 
@@ -800,7 +780,7 @@ mod tests {
         m.insert("f", 21.0);
 
         let d = p_ga(
-            &vec![&vec!["a", "b", "c"], &vec!["d", "e", "f"]],
+            &vec![vec!["a", "b", "c"], vec!["d", "e", "f"]],
             &m
         );
 
@@ -898,10 +878,10 @@ mod tests {
 
         let d = p_sf1j_sf2j(
             &[
-                &vec!["a", "b"],
-                &vec!["c", "d"],
-                &vec!["e", "f"],
-                &vec!["g", "h"],
+                vec!["a", "b"],
+                vec!["c", "d"],
+                vec!["e", "f"],
+                vec!["g", "h"],
             ],
             &m
         );
@@ -935,14 +915,14 @@ mod tests {
 
         let d = p_sf1a_sf2a_sf1b_sf2b(
             &[
-                &vec!["a", "b"],
-                &vec!["c", "d"],
-                &vec!["e", "f"],
-                &vec!["g", "h"],
-                &vec!["i", "j"],
-                &vec!["k", "l"],
-                &vec!["m", "n"],
-                &vec!["o", "p"],
+                vec!["a", "b"],
+                vec!["c", "d"],
+                vec!["e", "f"],
+                vec!["g", "h"],
+                vec!["i", "j"],
+                vec!["k", "l"],
+                vec!["m", "n"],
+                vec!["o", "p"],
             ],
             &m
         );
@@ -977,14 +957,14 @@ mod tests {
 
         let d = p_f(
             &[
-                &vec!["a", "b"],
-                &vec!["c", "d"],
-                &vec!["e", "f"],
-                &vec!["g", "h"],
-                &vec!["i", "j"],
-                &vec!["k", "l"],
-                &vec!["m", "n"],
-                &vec!["o", "p"],
+                vec!["a", "b"],
+                vec!["c", "d"],
+                vec!["e", "f"],
+                vec!["g", "h"],
+                vec!["i", "j"],
+                vec!["k", "l"],
+                vec!["m", "n"],
+                vec!["o", "p"],
             ],
             &m
         );
@@ -1104,6 +1084,10 @@ mod tests {
 
         assert_eq!(gs[0][0], "Russia");
         assert_eq!(gs[0][1], "Saudi Arabia");
+
+        assert_eq!(gs[1][1], "Spain");
+        assert_eq!(gs[1][2], "Morocco");
+
         assert_eq!(gs[7][2], "Colombia");
         assert_eq!(gs[7][3], "Japan");
     }

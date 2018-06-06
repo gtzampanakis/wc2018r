@@ -65,6 +65,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::cmp::Eq;
 use std::hash::Hash;
+use std::ops::Index;
 
 extern crate regex;
 use regex::Regex;
@@ -416,6 +417,14 @@ fn calc_ps_diffs<'a>(
 }
 
 
+fn normalize_map<T: Eq + Hash>(m: &mut HashMap<T, f64>) {
+    let s: f64 = m.values().sum();
+    for v in m.values_mut() {
+        *v = *v/s;
+    }
+}
+
+
 /* Returns a HashMap mapping team names to strings and a vector of vectors
  * that contains the groups */
 fn parse_file_contents(file_contents: &str)
@@ -466,12 +475,25 @@ fn parse_file_contents(file_contents: &str)
 }
 
 
-fn print_ps(ps: &HashMap<&str, f64>) {
+fn print_state(
+    ps: &HashMap<&str, f64>,
+    ps_diffs: &HashMap<&str, f64>,
+    m: &Merits
+) {
     let mut keys_vec: Vec<&&str> = ps.keys().collect();
     keys_vec.sort_by(|a, b| ps[*b].partial_cmp(&ps[*a]).unwrap());
 
     for k in keys_vec {
-        println!("{0} {1:.3}", k, 1./ps[k]);
+        /* Don't use the index operator here. Apparently there is a compiler
+         * bug (https://github.com/rust-lang/rust/issues/30127) which causes
+         * an error to be given. */
+        println!(
+            "{0} {1:.3} {2:.3} {3:.3}",
+            k,
+            1./ps.index(k),
+            ps_diffs.index(k),
+            m.index(k)
+        );
     }
     println!();
 }
@@ -479,6 +501,12 @@ fn print_ps(ps: &HashMap<&str, f64>) {
 
 fn run_optimization(
         p_ref: &HashMap<&str, f64>, gs: &Vec<Vec<&str>>, inc: f64) {
+
+    let mut vkeys: Vec<&&str> = p_ref.keys().collect();
+    vkeys.sort();
+
+    let reference_team: &str = vkeys[0];
+
     let mut m = Merits::new();
     for key in p_ref.keys() {
         m.insert(key, DEFAULT_RATING_SIGNED.exp());
@@ -487,26 +515,33 @@ fn run_optimization(
     let mut repi = 1;
     loop {
         let p_est = p_f(&gs[..], &m);
-        print_ps(&p_est);
         println!("Iteration {}", repi);
 
         let ps_diffs = calc_ps_diffs(p_ref, &p_est);
-        print_ps(&p_est);
+        println!("Reference team is {}", reference_team);
+        println!("");
+        print_state(&p_est, &ps_diffs, &m);
 
         for (t, diff) in ps_diffs {
-            let newval = (m[t].ln() + diff * inc).exp();
-            m.insert(t, newval);
+            if t != reference_team {
+                let newval = (m[t].ln() + diff * inc).exp();
+                m.insert(t, newval);
+            }
         }
 
         repi += 1;
     }
+
 }
 
 
 fn main() {
     let file_contents = &String::from_utf8(
                         std::fs::read("wc_odds.csv").unwrap()).unwrap();
-    let (p_ref, gs) = parse_file_contents(file_contents);
+    let (mut p_ref, gs) = parse_file_contents(file_contents);
+    /* TODO: Use normalization that takes into account favorite/longshot
+     * bias. */
+    normalize_map(&mut p_ref);
     run_optimization(&p_ref, &gs, 6.);
 }
 

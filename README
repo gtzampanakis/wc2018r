@@ -1,0 +1,182 @@
+wc2018r: Infer the strength of each team participating in the 2018 FIFA World
+Cup, given only the bookmaker winner odds.
+
+This project is mainly a way to practice my Rust. It is a translation of my
+wc2018 project, which was written in Python. Some features have been added to
+this Rust version that did not exist in the Python one.
+
+
+=========
+The model
+=========
+
+Bookmakers publish odds for the winner of the 2018 FIFA World Cup. But can it
+be said that the nth favorite to win the cup is also the nth strongest team
+among those participating? Of course not, because the winner odds are
+affected by the strength of the opponents each team will have to face.
+
+Is it possible to use (a) the winner odds and (b) the schedule of the
+tournament to infer a positive "merit" (i.e. strength) parameter for each
+team? To do so, a model is needed that uses those merits to calculate
+probabilities for the outcomes of contests between teams. Such contests are
+the World Cup round-robin groups of 4 teams or the knockout matches of 2
+teams.
+
+In the case of a contest of two teams t_1 and t_2 with merits m_1 and m_2
+i.e. a knockout match the model is
+
+    P(t_1 wins t_2) = m_1 / (m_1 + m_2). 
+
+For round-robin groups of four teams t_1, t_2, t_3, t_4, with merits m_1,
+m_2, m_3, m_4 we use the adjusted merits ma_i = m_i^f, with f being the
+"group fickleness" parameter. This parameter allows to make group
+competitions more or less dominated by the best teams. The full model is
+
+    P(t_i wins group) = ma_i / (ma_1 + ma_2 + ma_3 + ma_4) and
+    P(t_j finishes second | t_i wins group) = 
+                        ma_j / (ma_1 + ma_2 + ma_3 + ma_4 - ma_i).
+
+The algorithm to infer the m_i values is
+
+1. Set m_i = 1, 1 <= i <= 32.
+
+2. Given the m_i values and the exact probability equations for the winner of
+the tournament (those equations will be given later in the "Exact probability
+equations for the tournament" section) calculate the estimated probability
+pest_i of each team winning the tournament.
+
+3. Set d_i = pref_i - pest_i. pref_i are the probabilities calculated in the
+previous step. pset_i are the probabilities derived from the bookmaker odds.
+
+4. Set m_i = m_i + d_i * r, where r is the "rate of correction" parameter
+that allows to control the rate of convergence. Note that high values of r
+will cause the process to diverge.
+
+5. Go to 2.
+
+The process continues until abs(d_i) is sufficiently small.
+
+An example output of the program after 748 iterations (columns are: team,
+estimated odds to win tournament, difference from bookmaker odds, merit):
+
+Brazil 5.678 -0.000 1.421
+Germany 6.246 -0.000 1.337
+Spain 7.950 -0.000 1.185
+France 8.518 -0.000 1.172
+Argentina 12.492 0.000 1.000
+Belgium 13.628 -0.000 0.916
+England 21.578 -0.000 0.758
+Portugal 29.528 -0.000 0.698
+Uruguay 38.613 -0.000 0.645
+Croatia 38.613 -0.000 0.678
+Russia 46.563 -0.000 0.609
+Colombia 46.563 -0.000 0.608
+Poland 57.919 -0.000 0.571
+Mexico 114.703 -0.000 0.485
+Switzerland 114.703 -0.000 0.481
+Denmark 114.703 -0.000 0.485
+Egypt 171.487 -0.000 0.437
+Sweden 171.487 -0.000 0.443
+Serbia 228.270 -0.000 0.412
+Senegal 228.270 -0.000 0.406
+Peru 228.270 -0.000 0.415
+Nigeria 228.270 -0.000 0.439
+Iceland 228.270 -0.000 0.439
+Japan 341.838 -0.000 0.371
+Australia 341.838 -0.000 0.379
+Costa Rica 568.972 -0.000 0.338
+Iran 568.972 -0.000 0.347
+Morocco 568.972 -0.000 0.347
+Tunisia 852.890 -0.000 0.310
+South Korea 852.890 -0.000 0.312
+Panama 1136.806 -0.000 0.292
+Saudi Arabia 1136.807 -0.000 0.288
+
+
+
+==============================================
+Exact probability equations for the tournament
+==============================================
+
+The 2018 FIFA World Cup has the following format
+
+
+ A1 ----+
+     RS1|----+
+ B2 ----+    |
+          QF1|----+
+ C1 ----+    |    |
+     RS2|----+    |
+ D2 ----+         |
+               SF1|----+
+ E1 ----+         |    |
+     RS5|----+    |    |
+ F2 ----+    |    |    |
+          QF3|----+    |
+ G1 ----+    |         |
+     RS6|----+         |
+ H2 ----+              |
+                       |
+                      F|------
+                       |
+ B1 ----+              |
+     RS3|----+         |
+ A2 ----+    |         |
+          QF2|----+    |
+ D1 ----+    |    |    |
+     RS4|----+    |    |
+ C2 ----+         |    |
+               SF2|----+
+ F1 ----+         |
+     RS7|----+    |
+ E2 ----+    |    |
+          QF4|----+
+ H1 ----+    |
+     RS8|----+
+ G2 --- +
+
+C1: winner of group C
+F2: runner-up of group F
+RS3: 3rd match in the Round of Sixteen
+QF2: 2nd match in the Quarter Finals
+SF1: 1st match in the Semi Finals
+F: Final
+
+Some convenient properties occur from this format.
+
+In the equations (given in Latex format) that follow the suffixes A and B are
+appended to the match codes. For example, QF2A/QF2B means team A/B
+(top/bottom team as it appears in the graph):
+
+P(SF_1A, SF_2A)
+   = \sum_{GA} P(SF_1A, SF_2A, GA_ABCD)
+   = \sum_{GA} P(SF_1A, SF_2A | GA_ABCD) P(GA_ABCD)
+   = \sum_{GA} P(SF_1A | GA_ABCD) P(SF_2A | GA_ABCD)
+
+P(SF_1B, SF_2B) = \sum_{GA P(SF_1B | GA_EFGH) P(SF_2B | GA_EFGH) P(GA_EFGH)
+
+P(SF_1A, SF_1B, SF_2A, SF_2B) = P(SF_1A, SF_2A) P(SF_1B, SF_2B)
+
+P(F) = \sum_{SF} P(F | SF1A, SF1B, SF2A, SF2B) P(SF1A, SF2A) P(SF1B, SF2B)
+
+Since those equations are exact and tractable we do not have to use
+time-consuming Monte-Carlo methods thus the calculation is very fast.
+
+
+==========
+How to run
+==========
+
+In the wc_odds.csv file specify the bookmaker odds and which teams are in
+each group. The wc_odds.csv file included contains winner odds taken some
+time around 2018-05-15.
+
+Use "cargo run --release" to run the iterative process. Use Ctrl-C to stop it
+when you are satisfied. Note that if you run without --release you should
+expect a slowdown factor of about 50.
+
+You can use "cargo test" to run the unit tests. But note that they are meant
+to be run with GROUP_FICKLENESS = 1.0 and they use exact floating point
+values as the expected results so they can be off when run in a different
+computer to the one I developed in.
+

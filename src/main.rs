@@ -1,71 +1,14 @@
-/*
-The World Cup 2018 has the following format.
-
- A1 ----+
-     RS1|----+
- B2 ----+    |
-          QF1|----+
- C1 ----+    |    |
-     RS2|----+    |
- D2 ----+         |
-               SF1|----+
- E1 ----+         |    |
-     RS5|----+    |    |
- F2 ----+    |    |    |
-          QF3|----+    |
- G1 ----+    |         |
-     RS6|----+         |
- H2 ----+              |
-                       |
-                      F|------
-                       |
- B1 ----+              |
-     RS3|----+         |
- A2 ----+    |         |
-          QF2|----+    |
- D1 ----+    |    |    |
-     RS4|----+    |    |
- C2 ----+         |    |
-               SF2|----+
- F1 ----+         |
-     RS7|----+    |
- E2 ----+    |    |
-          QF4|----+
- H1 ----+    |
-     RS8|----+
- G2 --- +
-
-C1: winner of group C
-F2: runner-up of group F
-RS3: 3rd match in the Round of Sixteen
-QF2: 2nd match in the QuarterFinals
-SF1: 1st match in the SemiFinals
-F: Final
-
-Some convenient properties occur from this format.
-
-In the analysis that follows the suffixes A and B are appended to the match
-codes. For example, QF2A/QF2B means team A/B (top/bottom team as it appears in
-the graph).
-
-P(SF_1A, SF_2A)
-   = \sum_{GA} P(SF_1A, SF_2A, GA_ABCD)
-   = \sum_{GA} P(SF_1A, SF_2A | GA_ABCD) P(GA_ABCD)
-   = \sum_{GA} P(SF_1A | GA_ABCD) P(SF_2A | GA_ABCD)
-
-P(SF_1B, SF_2B) = \sum_{GA P(SF_1B | GA_EFGH) P(SF_2B | GA_EFGH) P(GA_EFGH)
-
-P(SF_1A, SF_1B, SF_2A, SF_2B) = P(SF_1A, SF_2A) P(SF_1B, SF_2B)
-
-P(F) = \sum_{SF} P(F | SF1A, SF1B, SF2A, SF2B) P(SF1A, SF2A) P(SF1B, SF2B)
-
-*/
-
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::cmp::Eq;
 use std::hash::Hash;
 use std::ops::Index;
+
+
+mod constants;
+use constants::DEFAULT_RATING_SIGNED;
+use constants::GROUP_FICKLENESS;
+use constants::RATE_OF_CORRECTION;
 
 extern crate regex;
 use regex::Regex;
@@ -74,7 +17,6 @@ type Dist<T> = HashMap<T, f64>;
 type Merits<'a> = HashMap<&'a str, f64>;
 type Teams<'a> = Vec<&'a str>;
 
-const DEFAULT_RATING_SIGNED: f64 = 0.;
 
 /* Combines independent distributions into one. The resulting distribution has
  * references to the originals' keys. */
@@ -321,28 +263,64 @@ fn prob_match(t1: &str, t2: &str, m: &Merits) -> f64 {
 }
 
 
+fn adj_merits_for_fickleness<'a>(m: &Merits<'a>) -> Merits<'a> {
+    let mut m_adj = Merits::new();
+    for (t, v) in m.iter() {
+        m_adj.insert(
+            t,
+            v.powf(GROUP_FICKLENESS)
+        );
+    }
+
+    m_adj
+
+}
+
+
 fn group_probs<'a>(ts: &Teams<'a>, m: &Merits<'a>) 
                                 -> Dist<(&'a str, &'a str)> {
     let mut sum_ms = 0.;
     let mut result = Dist::new();
     let mut c = Combinator::new(ts.len(), 2);
 
+    let m_adj = adj_merits_for_fickleness(m);
+
     for t in ts.iter() {
-        sum_ms += m[t];
+        sum_ms += m_adj[t];
     }
 
     while c.next() {
         for si in 0..2 {
             let t1 = ts[c.v[si]];
             let t2 = ts[c.v[1-si]];
-            let p1 = m[t1] / sum_ms;
-            let p2 = m[t2] / (sum_ms - m[t1]);
+            let p1 = m_adj[t1] / sum_ms;
+            let p2 = m_adj[t2] / (sum_ms - m_adj[t1]);
             /* Keys are unique, no need to check if they already exist. */
             result.insert( (t1, t2), p1 * p2 );
         }
     }
 
     result
+}
+
+
+fn group_winner_probs<'a>(ts: &Teams<'a>, m: &Merits<'a>)
+							-> Dist<&'a str> {
+    let mut sum_ms = 0.;
+	let mut result = Dist::new();
+
+    let m_adj = adj_merits_for_fickleness(m);
+
+    for t in ts.iter() {
+        sum_ms += m_adj[t];
+    }
+
+    for t in ts.iter() {
+        let p = m_adj[t] / sum_ms;
+        result.insert(*t, p);
+    }
+
+	result
 }
 
 
@@ -478,6 +456,7 @@ fn parse_file_contents(file_contents: &str)
 fn print_state(
     ps: &HashMap<&str, f64>,
     ps_diffs: &HashMap<&str, f64>,
+    gs: &Vec<Vec<&str>>,
     m: &Merits
 ) {
     let mut keys_vec: Vec<&&str> = ps.keys().collect();
@@ -496,11 +475,24 @@ fn print_state(
         );
     }
     println!();
+
+
+    for g in gs.iter() {
+        let d = group_winner_probs(g, m);
+        let mut keys_vec: Vec<&&str> = d.keys().collect();
+        keys_vec.sort_by(|a, b| d[*b].partial_cmp(&d[*a]).unwrap());
+
+        for t in keys_vec {
+            println!("{0}, {1:.3}", t, 1./d[*t]);
+        }
+        println!();
+    }
+    println!();
 }
 
 
 fn run_optimization(
-        p_ref: &HashMap<&str, f64>, gs: &Vec<Vec<&str>>, inc: f64) {
+        p_ref: &HashMap<&str, f64>, gs: &Vec<Vec<&str>>) {
 
     let mut vkeys: Vec<&&str> = p_ref.keys().collect();
     vkeys.sort();
@@ -520,11 +512,11 @@ fn run_optimization(
         let ps_diffs = calc_ps_diffs(p_ref, &p_est);
         println!("Reference team is {}", reference_team);
         println!("");
-        print_state(&p_est, &ps_diffs, &m);
+        print_state(&p_est, &ps_diffs, gs, &m);
 
         for (t, diff) in ps_diffs {
             if t != reference_team {
-                let newval = (m[t].ln() + diff * inc).exp();
+                let newval = (m[t].ln() + diff * RATE_OF_CORRECTION).exp();
                 m.insert(t, newval);
             }
         }
@@ -542,7 +534,7 @@ fn main() {
     /* TODO: Use normalization that takes into account favorite/longshot
      * bias. */
     normalize_map(&mut p_ref);
-    run_optimization(&p_ref, &gs, 6.);
+    run_optimization(&p_ref, &gs);
 }
 
 

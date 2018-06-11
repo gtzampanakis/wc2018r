@@ -1,5 +1,5 @@
 wc2018r: Infer the strength of each team participating in the 2018 FIFA World
-Cup, given only the bookmaker winner odds.
+Cup, given only the bookmaker tournament winner odds.
 
 This project is mainly a way to practice my Rust. It is a translation of my
 wc2018 project, which was written in Python. Some features have been added to
@@ -12,8 +12,8 @@ The model
 
 Bookmakers publish odds for the winner of the 2018 FIFA World Cup. But can it
 be said that the nth favorite to win the cup is also the nth strongest team
-among those participating? Of course not, because the winner odds are
-affected by the strength of the opponents each team will have to face.
+among those participating? No, because the winner odds are affected by the
+strength of the opponents each team will have to face.
 
 Is it possible to use (a) the winner odds and (b) the schedule of the
 tournament to infer a positive "merit" (i.e. strength) parameter for each
